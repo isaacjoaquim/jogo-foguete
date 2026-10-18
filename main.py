@@ -13,40 +13,35 @@ DT = 1.0 / 60.0  # Δt = 1/60 s fixo (requisito)
 
 # Constantes físicas fundamentais
 GRAVITY = 9.8                               # g = 9,8 m/s²
-ROCKET_DRY_MASS = 100_000.0                # Massa do foguete: 100 ton = 100.000 kg
-FUEL_TOTAL_MASS = 100_000.0                # Massa do combustível: 100 ton = 100.000 kg
+ROCKET_DRY_MASS = 100_000.0                # Massa do foguete: 100 ton = 100.000 kg (requisito estrito da atividade)
+FUEL_TOTAL_MASS = 100_000.0                # Capacidade máxima do tanque: 100 ton (requisito estrito da atividade)
+INITIAL_FUEL_MASS = 100_000.0              # Combustível inicial: 100 ton (tanque CHEIO conforme solicitado)
 MAX_ANGLE = 30.0                            # ±30° com a vertical
 INITIAL_ALTITUDE = 800.0                    # Começa já no ar (requisito)
+TARGET_ALTITUDE = 10_000.0                  # Altitude para vitória (chegada à órbita espacial: 10.000 m / 10 km)
+SPEED_OF_SOUND = 340.0                      # Velocidade do som no ar ao nível do mar (Mach 1.0 = 340 m/s)
 
-# Parâmetros padrão legados (requisitos estritos da atividade)
-THRUST_FORCE = 2_000_000.0                 # Força: 2 × 10⁶ N
-FUEL_PER_FRAME = 0.001 * FUEL_TOTAL_MASS   # 0,1% do combustível total/frame = 100 kg
+# (Parâmetros de empuxo e consumo definidos dentro de cada modo em GAME_MODES)
 
 # -----------------------------------------------------------------------------
 # Dicionário de Modos de Jogo
 # -----------------------------------------------------------------------------
 GAME_MODES = {
     "ACADEMICO": {
-        "id": "ACADEMICO",
         "title": "Modo 1: Acadêmico",
         "subtitle": "Requisitos Estritos da Atividade",
         "thrust": 2_000_000.0,              # Força original da atividade: 2.0 MN
         "fuel_per_frame": 0.001 * FUEL_TOTAL_MASS,  # 100 kg por frame
         "rotation_speed": 0.0,              # Salto instantâneo para ±30° (original)
-        "tag": "F = 2.0 MN  |  TWR = 1.02  |  Ângulo Fixo ±30°",
         "badge_color": (255, 150, 50),
-        "desc_short": "Fiel ao enunciado da atividade. Aceleração inicial de apenas 0,2 m/s². Cai ao inclinar 30°.",
     },
     "AEROESPACIAL": {
-        "id": "AEROESPACIAL",
         "title": "Modo 2: Aeroespacial",
-        "subtitle": "Opção 1 — Realista & Jogável",
-        "thrust": 2_800_000.0,              # Empuxo de engenharia aeroespacial: 2.8 MN (TWR 1.43, estilo Falcon 9)
+        "subtitle": "Opção 1 — Realista & Super Veloz",
+        "thrust": 3_500_000.0,              # Empuxo de alta potência: 3.5 MN para altíssima velocidade
         "fuel_per_frame": 0.001 * FUEL_TOTAL_MASS,  # 100 kg por frame
         "rotation_speed": 55.0,             # Rotação suave contínua (55°/s) com vetorização (gimbal)
-        "tag": "F = 2.8 MN  |  TWR = 1.43  |  Gimbal Suave (55°/s)",
         "badge_color": (40, 225, 160),
-        "desc_short": "Padrão de foguetes reais (Falcon 9). Decolagem potente (4,2 m/s²) e curvas com sustentação.",
     }
 }
 
@@ -60,13 +55,23 @@ class SoundManager:
         self.enabled = False
         self.muted = False
         try:
-            pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=1024)
+            # Se o mixer já foi inicializado pelo pre_init+pygame.init(), não re-inicializa
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=1024)
             self.enabled = True
             self.sample_rate = 22050
             self.snd_boom = self._generate_explosion()
+            self.snd_boom_sonic = self._generate_sonic_boom()
             self.snd_engine = self._generate_engine_loop()
-            self.snd_engine.set_volume(0.12)   # Volume baixo e confortável
+            self.snd_refuel = self._generate_refuel()
+            self.snd_victory = self._generate_victory()
+            self.snd_blip = self._generate_ui_blip()
+            self.snd_engine.set_volume(0.12)   # Volume base inicial
             self.snd_boom.set_volume(0.25)
+            self.snd_boom_sonic.set_volume(0.35)
+            self.snd_refuel.set_volume(0.32)
+            self.snd_victory.set_volume(0.35)
+            self.snd_blip.set_volume(0.22)
             self.engine_channel = None
         except Exception as e:
             print(f"Aviso: áudio desabilitado ({e})")
@@ -79,6 +84,19 @@ class SoundManager:
             buf.extend(raw)
             buf.extend(raw)
         return pygame.mixer.Sound(buffer=bytes(buf))
+
+    def _generate_sonic_boom(self):
+        """Gera um estrondo sônico duplo característico (onda N de Mach) ao romper a barreira do som."""
+        n = int(self.sample_rate * 0.85)
+        samples = []
+        for i in range(n):
+            t = i / self.sample_rate
+            p1 = math.exp(-max(0.0, t - 0.01) * 26.0) * math.sin(2 * math.pi * 50 * t)
+            p2 = (math.exp(-max(0.0, t - 0.09) * 22.0) * math.sin(2 * math.pi * 45 * (t - 0.09))) if t >= 0.09 else 0.0
+            env = max(0.0, 1.0 - (t / 0.85) ** 0.5)
+            noise = (random.random() * 2 - 1) * math.exp(-t * 18.0) * 0.25
+            samples.append(max(-1.0, min(1.0, (p1 + p2 * 0.85 + noise) * env * 0.45)))
+        return self._make_sound(samples)
 
     def _generate_engine_loop(self):
         """Gera um som de motor grave, suave e contínuo, sem chiados agudos ou estalos."""
@@ -122,29 +140,112 @@ class SoundManager:
             samples.append((noise + sub) * 0.4)
         return self._make_sound(samples)
 
+    def _generate_refuel(self):
+        """Gera um som brilhante e harmônico de recarga de combustível."""
+        n = int(self.sample_rate * 0.45)
+        samples = []
+        freqs = [523.25, 659.25, 783.99, 1046.50]
+        for i in range(n):
+            t = i / self.sample_rate
+            seg = min(3, int(t / 0.10))
+            f = freqs[seg]
+            t_seg = t % 0.10
+            note_env = math.exp(-t_seg * 12.0)
+            overall_env = max(0.0, 1.0 - (t / 0.45) ** 1.5)
+            tone = math.sin(2 * math.pi * f * t) * 0.6 + math.sin(2 * math.pi * f * 2 * t) * 0.2
+            samples.append(tone * note_env * overall_env * 0.35)
+        return self._make_sound(samples)
+
     def toggle_mute(self):
         self.muted = not self.muted
         if self.muted:
             self.stop_all()
         return self.muted
 
-    def play_engine(self, active):
+    def play_sonic_boom(self):
+        """Toca o estrondo sônico ao ultrapassar Mach 1.0."""
+        if self.enabled and not self.muted:
+            self.snd_boom_sonic.play()
+
+    def play_engine(self, active, altitude=0.0):
+        """Atualiza o som do motor com atenuação física no vácuo aeroespacial (Melhoria 5)."""
         if not self.enabled or self.muted:
             if self.engine_channel is not None:
                 self.engine_channel.stop()
                 self.engine_channel = None
             return
         if active:
+            # Conforme o foguete sobe e a atmosfera se rarefaz, o som não se propaga no vácuo;
+            # o volume é atenuado suavemente para uma vibração abafada na fuselagem.
+            alt_ratio = min(1.0, max(0.0, altitude / TARGET_ALTITUDE))
+            vol = 0.13 * (1.0 - 0.73 * (alt_ratio ** 1.25))
+
             if self.engine_channel is None or not self.engine_channel.get_busy():
                 self.engine_channel = self.snd_engine.play(loops=-1)
+            if self.engine_channel is not None:
+                self.engine_channel.set_volume(max(0.035, vol))
         else:
             if self.engine_channel is not None:
                 self.engine_channel.stop()
                 self.engine_channel = None
 
+    def _generate_victory(self):
+        """Gera um som triunfante de fanfarra para a vitória."""
+        n = int(self.sample_rate * 1.6)
+        samples = []
+        melody = [
+            (0.00, 0.18, 523.25),   # Dó
+            (0.18, 0.36, 659.25),   # Mi
+            (0.36, 0.54, 783.99),   # Sol
+            (0.54, 0.85, 1046.50),  # Dó agudo
+            (0.85, 1.60, [1046.50, 1318.51]), # Acorde triunfante final (Dó + Mi)
+        ]
+        for i in range(n):
+            t = i / self.sample_rate
+            val = 0.0
+            for start, end, note in melody:
+                if start <= t < end:
+                    dt_note = t - start
+                    dur = end - start
+                    env = max(0.0, 1.0 - (dt_note / dur)) * min(1.0, dt_note * 60.0)
+                    if isinstance(note, list):
+                        for f in note:
+                            val += (math.sin(2 * math.pi * f * t) * 0.4 + math.sin(4 * math.pi * f * t) * 0.15) * env
+                    else:
+                        val += (math.sin(2 * math.pi * note * t) * 0.5 + math.sin(4 * math.pi * note * t) * 0.2) * env
+                    break
+            samples.append(max(-1.0, min(1.0, val * 0.4)))
+        return self._make_sound(samples)
+
     def play_explosion(self):
         if self.enabled and not self.muted:
             self.snd_boom.play()
+
+    def play_refuel(self):
+        if self.enabled and not self.muted:
+            self.snd_refuel.play()
+
+    def play_victory(self):
+        if self.enabled and not self.muted:
+            self.snd_victory.play()
+
+    def _generate_ui_blip(self):
+        """Gera um som sutil e agradável de clique/navegação de interface."""
+        n = int(self.sample_rate * 0.05)
+        samples = []
+        freq = 720.0
+        for i in range(n):
+            t = i / self.sample_rate
+            env = math.exp(-t * 90.0)
+            samples.append(math.sin(2 * math.pi * freq * t) * env * 0.25)
+        return self._make_sound(samples)
+
+    def play_ui_blip(self):
+        if self.enabled and not self.muted:
+            try:
+                self.snd_blip.play()
+            except Exception:
+                pass
 
     def stop_all(self):
         if self.enabled:
@@ -248,6 +349,126 @@ class Cloud:
 
 
 # =============================================================================
+# Cápsula de Combustível — Objeto coletável no ar/espaço ("No Meio do Caminho")
+# =============================================================================
+class FuelCanister:
+    def __init__(self, x, y, amount=20_000.0):
+        self.x = x
+        self.y = y                         # Posição fixa no ar (parado)
+        self.amount = amount                # Quantidade de combustível recarregado (kg)
+        self.collected = False
+        self.radius = 32.0                 # Raio de colisão ampliado para facilitar a coleta
+        self.pulse = random.uniform(0, math.pi * 2)
+
+    def update(self, dt):
+        if self.collected:
+            return
+        self.pulse += dt * 3.0              # Apenas animação de pulso luminoso (posição perfeitamente estática)
+
+    def draw(self, surface, cam_x, cam_y, sw, sh):
+        if self.collected:
+            return
+        sx = (self.x - cam_x) + sw / 2
+        sy = sh / 2 - (self.y - cam_y)
+
+        # Desenha se estiver dentro dos limites da tela (com margem de brilho)
+        if -90 <= sx <= sw + 90 and -90 <= sy <= sh + 90:
+            pulse_factor = (math.sin(self.pulse * 2.0) + 1.0) * 0.5
+            glow_r = int(32 + pulse_factor * 8)
+
+            # 1. Halo / Aura brilhante pulsante
+            glow_surf = pygame.Surface((glow_r * 2 + 4, glow_r * 2 + 4), pygame.SRCALPHA)
+            pygame.draw.circle(glow_surf, (0, 240, 160, int(30 + pulse_factor * 35)),
+                               (glow_r + 2, glow_r + 2), glow_r)
+            pygame.draw.circle(glow_surf, (80, 255, 210, int(60 + pulse_factor * 40)),
+                               (glow_r + 2, glow_r + 2), int(glow_r * 0.6))
+            surface.blit(glow_surf, (sx - glow_r - 2, sy - glow_r - 2))
+
+            # 2. Cápsula / Pod metálico de combustível sci-fi
+            pod_w, pod_h = 32, 44
+            pod_surf = pygame.Surface((pod_w + 10, pod_h + 16), pygame.SRCALPHA)
+            pcx = (pod_w + 10) // 2
+            pcy = (pod_h + 16) // 2
+
+            # Micro-chama de sustentação / propulsor antigravitacional na base
+            flame_h = int(6 + pulse_factor * 6)
+            pygame.draw.polygon(pod_surf, (0, 220, 255, 230), [
+                (pcx - 5, pcy + 17), (pcx + 5, pcy + 17), (pcx, pcy + 17 + flame_h)
+            ])
+            pygame.draw.polygon(pod_surf, (255, 255, 255, 240), [
+                (pcx - 2, pcy + 17), (pcx + 2, pcy + 17), (pcx, pcy + 17 + flame_h // 2)
+            ])
+
+            # Aletas estabilizadoras laterais
+            pygame.draw.polygon(pod_surf, (255, 120, 40), [
+                (pcx - 12, pcy + 8), (pcx - 18, pcy + 16), (pcx - 12, pcy + 16)
+            ])
+            pygame.draw.polygon(pod_surf, (255, 120, 40), [
+                (pcx + 12, pcy + 8), (pcx + 18, pcy + 16), (pcx + 12, pcy + 16)
+            ])
+
+            # Corpo principal (blindagem cinza-titânio)
+            body_rect = pygame.Rect(pcx - 12, pcy - 16, 24, 32)
+            pygame.draw.rect(pod_surf, (220, 230, 245), body_rect, border_radius=6)
+            pygame.draw.rect(pod_surf, (60, 75, 95), body_rect, 2, border_radius=6)
+
+            # Anéis de reforço superior e inferior
+            pygame.draw.rect(pod_surf, (45, 55, 75), (pcx - 13, pcy - 15, 26, 5), border_radius=2)
+            pygame.draw.rect(pod_surf, (45, 55, 75), (pcx - 13, pcy + 11, 26, 5), border_radius=2)
+
+            # Válvula / conector no topo
+            pygame.draw.rect(pod_surf, (255, 190, 40), (pcx - 5, pcy - 20, 10, 5), border_radius=2)
+
+            # Núcleo de combustível verde-esmeralda brilhante (visor transparente)
+            core_rect = pygame.Rect(pcx - 8, pcy - 8, 16, 17)
+            pygame.draw.rect(pod_surf, (0, 235, 130), core_rect, border_radius=3)
+            # Reflexo de vidro no visor
+            pygame.draw.line(pod_surf, (220, 255, 240, 220), (pcx - 6, pcy - 6), (pcx - 6, pcy + 6), 2)
+
+            # Ícone estilizado no centro do núcleo
+            pygame.draw.line(pod_surf, (255, 255, 255), (pcx, pcy - 4), (pcx, pcy + 4), 2)
+            pygame.draw.line(pod_surf, (255, 255, 255), (pcx - 4, pcy), (pcx + 4, pcy), 2)
+
+            surface.blit(pod_surf, (sx - pcx, sy - pcy))
+
+
+# =============================================================================
+# Texto Flutuante de Notificação (+25.000 kg, etc.)
+# =============================================================================
+class FloatingText:
+    def __init__(self, wx, wy, text, color=(0, 255, 170), duration=1.6):
+        self.wx = wx
+        self.wy = wy
+        self.text = text
+        self.color = color
+        self.duration = duration
+        self.life = duration
+
+    def update(self, dt):
+        self.wy += 30.0 * dt   # Sobe suavemente
+        self.life -= dt
+
+    def draw(self, surface, font, cam_x, cam_y, sw, sh):
+        if self.life <= 0:
+            return
+        sx = (self.wx - cam_x) + sw / 2
+        sy = sh / 2 - (self.wy - cam_y)
+
+        if -150 <= sx <= sw + 150 and -50 <= sy <= sh + 50:
+            alpha = max(0, min(255, int(255 * (self.life / self.duration))))
+            txt_surf = font.render(self.text, True, self.color)
+            shadow_surf = font.render(self.text, True, (0, 0, 0))
+
+            surf_w, surf_h = txt_surf.get_width() + 6, txt_surf.get_height() + 6
+            combined = pygame.Surface((surf_w, surf_h), pygame.SRCALPHA)
+            combined.blit(shadow_surf, (3, 3))
+            combined.blit(txt_surf, (1, 1))
+            combined.set_alpha(alpha)
+
+            surface.blit(combined, (sx - surf_w // 2, sy - surf_h // 2))
+
+
+# =============================================================================
 # Foguete — Física correta conforme todos os requisitos
 #
 # Equações implementadas:
@@ -270,14 +491,21 @@ class Rocket:
         self.y = INITIAL_ALTITUDE           # altitude (m) — começa no ar
         self.vx = 0.0                       # velocidade horizontal (m/s)
         self.vy = 0.0                       # velocidade vertical (m/s)
-        self.fuel_mass = FUEL_TOTAL_MASS    # massa de combustível restante (kg)
+        self.fuel_mass = INITIAL_FUEL_MASS    # Começa com tanque CHEIO (100 ton)
         self.angle = 0.0                    # ângulo do nariz em graus (+ = direita)
         self.is_thrusting = False
         self.alive = True
+        self.mach_broken = False            # Rastreador de quebra da barreira do som (Mach 1.0)
+
+    def refuel(self, amount):
+        """Recarrega combustível respeitando a capacidade máxima do tanque."""
+        old = self.fuel_mass
+        self.fuel_mass = min(FUEL_TOTAL_MASS, self.fuel_mass + amount)
+        return self.fuel_mass - old
 
     @property
     def total_mass(self):
-        """Massa total = massa seca do foguete + massa do combustível restante."""
+        """Massa total = massa seca do foguete (100t) + massa do combustível restante."""
         return ROCKET_DRY_MASS + self.fuel_mass
 
     @property
@@ -286,7 +514,7 @@ class Rocket:
         weight = self.total_mass * GRAVITY
         return (self.thrust_force / weight) if weight > 0 else 0.0
 
-    def update(self, keys, particles, sound_manager):
+    def update(self, keys, particles, sound_manager, floating_texts=None):
         if not self.alive:
             return
 
@@ -338,11 +566,13 @@ class Rocket:
             ax += self.thrust_force * math.sin(angle_rad) / mass   # componente horizontal
             ay += self.thrust_force * math.cos(angle_rad) / mass   # componente vertical
 
-            # Gera partículas de exaustão
+            # Gera partículas de exaustão com expansão no vácuo (Melhoria 3)
             self._spawn_exhaust(particles)
 
         self.is_thrusting = thrust_active
-        sound_manager.play_engine(thrust_active)
+
+        # Atualiza som com atenuação acústica no vácuo espacial (Melhoria 5)
+        sound_manager.play_engine(thrust_active, self.y)
 
         # -----------------------------------------------------------------
         # 4. Integração numérica com Δt = 1/60 s
@@ -353,7 +583,36 @@ class Rocket:
         self.y += self.vy * DT
 
         # -----------------------------------------------------------------
-        # 5. Colisão com o solo → game over
+        # 5. Detecção de Barreira do Som (Mach 1.0 = 340 m/s - Melhoria 2)
+        # -----------------------------------------------------------------
+        spd = math.hypot(self.vx, self.vy)
+        mach = spd / SPEED_OF_SOUND
+        if mach >= 1.0 and not self.mach_broken:
+            self.mach_broken = True
+            sound_manager.play_sonic_boom()
+
+            # Anel expansivo de condensação de vapor sônico
+            for _ in range(45):
+                ang = random.uniform(0, math.pi * 2)
+                p_spd = random.uniform(70, 220)
+                particles.append(Particle(
+                    self.x + math.cos(ang) * 16,
+                    self.y + math.sin(ang) * 16,
+                    self.vx + math.cos(ang) * p_spd,
+                    self.vy + math.sin(ang) * p_spd,
+                    (215, 245, 255), life=random.uniform(0.4, 0.85), size=random.uniform(6, 14)
+                ))
+
+            if floating_texts is not None:
+                floating_texts.append(FloatingText(
+                    self.x, self.y + 40, "💥 ESTRONDO SÔNICO! (MACH 1.0)",
+                    color=(255, 220, 70), duration=2.2
+                ))
+        elif mach < 0.85:
+            self.mach_broken = False
+
+        # -----------------------------------------------------------------
+        # 6. Colisão com o solo → game over
         # -----------------------------------------------------------------
         if self.y <= 0:
             self.y = 0.0
@@ -362,7 +621,12 @@ class Rocket:
             self._spawn_crash(particles)
 
     def _spawn_exhaust(self, particles):
-        """Partículas de chama saindo do bocal (oposto ao nariz)."""
+        """Partículas de chama saindo do bocal (oposto ao nariz).
+        Melhoria 3: Expansão da pluma com a altitude (física de bocais no vácuo).
+        - No nível do mar / baixa altitude: atmosfera densa comprime o jato (estreito e focado).
+        - Em alta altitude / vácuo: gases se expandem em leque aberto (under-expanded plume)
+          com emissão óptica variando de chama laranja para plasma azul, ciano e violeta.
+        """
         angle_rad = math.radians(self.angle)
         offset = 35.0  # metros do centro ao bocal
 
@@ -370,35 +634,65 @@ class Rocket:
         ex = self.x - math.sin(angle_rad) * offset
         ey = self.y - math.cos(angle_rad) * offset
 
-        for _ in range(5):
-            spread = random.uniform(-0.35, 0.35)
+        # Fator de rarefação atmosférica / vácuo (0.0 no solo -> 1.0 em 4000m)
+        alt_factor = min(1.0, max(0.0, self.y / TARGET_ALTITUDE))
+
+        # Leque de expansão: de ±0.18 rad (solo comprimido) até ±0.80 rad (vácuo amplo)
+        spread_max = 0.18 + 0.62 * alt_factor
+        particle_count = 5 if alt_factor < 0.55 else 7
+
+        for _ in range(particle_count):
+            spread = random.uniform(-spread_max, spread_max)
             a = angle_rad + spread
-            spd = random.uniform(80, 200)
+            spd = random.uniform(80, 220)
 
             # Velocidade da exaustão: oposta ao nariz + velocidade do foguete
             pvx = self.vx - math.sin(a) * spd + random.uniform(-10, 10)
             pvy = self.vy - math.cos(a) * spd + random.uniform(-10, 10)
 
             r = random.random()
-            if r > 0.6:
-                color, sz = (255, 255, 200), random.uniform(5, 9)
-            elif r > 0.3:
-                color, sz = (255, 140, 20), random.uniform(7, 12)
+            if alt_factor < 0.35:
+                # Atmosfera densa: fogo clássico (amarelo brilhante, laranja e rubro)
+                if r > 0.6:
+                    color, sz = (255, 255, 210), random.uniform(5, 9)
+                elif r > 0.3:
+                    color, sz = (255, 140, 20), random.uniform(7, 12)
+                else:
+                    color, sz = (240, 50, 20), random.uniform(6, 10)
+            elif alt_factor < 0.70:
+                # Transição atmosférica: branco luminoso, azul celeste e âmbar
+                if r > 0.65:
+                    color, sz = (255, 255, 255), random.uniform(6, 11)
+                elif r > 0.35:
+                    color, sz = (80, 225, 255), random.uniform(7, 13)
+                elif r > 0.15:
+                    color, sz = (255, 175, 50), random.uniform(6, 11)
+                else:
+                    color, sz = (195, 120, 255), random.uniform(5, 10)
             else:
-                color, sz = (240, 50, 20), random.uniform(6, 10)
+                # Vácuo espacial: plasma azul-ciano, violeta e branco estelar
+                if r > 0.6:
+                    color, sz = (255, 255, 255), random.uniform(7, 13)
+                elif r > 0.3:
+                    color, sz = (50, 235, 255), random.uniform(9, 16)
+                elif r > 0.12:
+                    color, sz = (175, 130, 255), random.uniform(8, 15)
+                else:
+                    color, sz = (255, 205, 90), random.uniform(6, 10)
 
             particles.append(Particle(
                 ex + random.uniform(-3, 3), ey + random.uniform(-3, 3),
-                pvx, pvy, color, life=random.uniform(0.2, 0.45), size=sz
+                pvx, pvy, color, life=random.uniform(0.2, 0.48), size=sz
             ))
 
-        # Fumaça
-        if random.random() < 0.4:
+        # Fumaça visível só onde há ar suficiente; dissipa rapidamente no vácuo
+        smoke_chance = 0.40 * (1.0 - alt_factor)
+        if random.random() < smoke_chance:
             particles.append(Particle(
                 ex + random.uniform(-5, 5), ey + random.uniform(-3, 3),
                 self.vx + random.uniform(-15, 15),
                 self.vy - random.uniform(40, 90),
-                (180, 180, 190), life=0.6, size=random.uniform(10, 16)
+                (180, 180, 190), life=0.55 * (1.0 - alt_factor * 0.5), size=random.uniform(10, 16)
             ))
 
     def _spawn_crash(self, particles):
@@ -483,14 +777,57 @@ class Rocket:
             pygame.draw.rect(canvas, (0, 200, 100, 80),
                              (cx - 10, cy + 28 - fuel_bar_h, 20, fuel_bar_h))
 
-        # 8. Onda de choque em alta velocidade
+        # 8. Efeitos Supersônicos (Melhoria 2):
+        #    Cone de Condensação Prandtl-Glauert e Ondas de Choque Mach
         speed = math.hypot(self.vx, self.vy)
-        if speed > 100:
-            shock_alpha = min(160, int((speed - 100) * 1.2))
+        mach = speed / SPEED_OF_SOUND
+
+        # 8A. Cone de condensação de Prandtl-Glauert (regime transônico: Mach 0.78 a 1.35)
+        if 0.78 <= mach <= 1.35:
+            pg_intensity = max(0.0, 1.0 - abs(mach - 1.0) / 0.35)
+            pg_alpha = int(195 * pg_intensity)
+            if pg_alpha > 5:
+                pg_surf = pygame.Surface((canvas_size, canvas_size), pygame.SRCALPHA)
+                # Discoide / envelope de vapor de água condensada na cintura da fuselagem
+                pygame.draw.ellipse(pg_surf, (220, 245, 255, pg_alpha),
+                                    (cx - 36, cy - 8, 72, 24))
+                pygame.draw.ellipse(pg_surf, (255, 255, 255, int(pg_alpha * 0.75)),
+                                    (cx - 26, cy - 14, 52, 16))
+                canvas.blit(pg_surf, (0, 0))
+
+        # 8B. Ondas de Choque Supersônicas e Diamantes de Choque Mach (Mach > 1.0)
+        if mach > 1.0:
+            shock_alpha = min(210, int(90 + (mach - 1.0) * 85))
+            sin_mu = min(1.0, 1.0 / mach)
+            cos_mu = math.sqrt(max(0.0, 1.0 - sin_mu * sin_mu))
+            wing_len = 54.0
+
             shock_surf = pygame.Surface((canvas_size, canvas_size), pygame.SRCALPHA)
-            pygame.draw.lines(shock_surf, (180, 230, 255, shock_alpha), False,
-                              [(cx - 32, cy + 25), (cx, cy - 40), (cx + 32, cy + 25)], 3)
+
+            # Linhas oblíquas de choque de Mach saindo do nariz
+            nose_x, nose_y = cx, cy - 35
+            p_left = (nose_x - wing_len * sin_mu, nose_y + wing_len * cos_mu)
+            p_right = (nose_x + wing_len * sin_mu, nose_y + wing_len * cos_mu)
+            pygame.draw.line(shock_surf, (170, 235, 255, shock_alpha), (nose_x, nose_y), p_left, 2)
+            pygame.draw.line(shock_surf, (170, 235, 255, shock_alpha), (nose_x, nose_y), p_right, 2)
+
+            # Diamantes de Choque Mach no bocal de escape (quando o motor está acelerando)
+            if self.is_thrusting:
+                for i in range(1, 4):
+                    d_y = cy + 36 + i * 13
+                    pygame.draw.polygon(shock_surf, (100, 240, 255, min(220, shock_alpha + 15)), [
+                        (cx, d_y - 4), (cx + 5, d_y), (cx, d_y + 4), (cx - 5, d_y)
+                    ])
+                    pygame.draw.circle(shock_surf, (255, 255, 255, 220), (cx, d_y), 2)
+
             canvas.blit(shock_surf, (0, 0))
+        elif speed > 90:
+            # Em velocidades subsônicas médias: onda de arrasto suave
+            drag_alpha = min(120, int((speed - 90) * 0.8))
+            drag_surf = pygame.Surface((canvas_size, canvas_size), pygame.SRCALPHA)
+            pygame.draw.lines(drag_surf, (180, 230, 255, drag_alpha), False,
+                              [(cx - 28, cy + 20), (cx, cy - 38), (cx + 28, cy + 20)], 2)
+            canvas.blit(drag_surf, (0, 0))
 
         # Rotação: pygame roda CCW para ângulo positivo.
         # Ângulo físico positivo = nariz para a DIREITA = rotação CW = ângulo negativo.
@@ -504,6 +841,9 @@ class Rocket:
 # =============================================================================
 class RocketGame:
     def __init__(self):
+        # Pré-configura o mixer ANTES do pygame.init() para garantir
+        # que as configurações de áudio sejam respeitadas (evita reinit silencioso)
+        pygame.mixer.pre_init(frequency=22050, size=-16, channels=2, buffer=1024)
         pygame.init()
 
         # Tela cheia (requisito)
@@ -526,6 +866,7 @@ class RocketGame:
         self.sounds = SoundManager()
         self.selected_mode = "AEROESPACIAL"   # Modo 2 (Realista/Jogável) selecionado por padrão; fácil de alternar
         self.state = "MENU"                   # "MENU", "PLAYING", "GAMEOVER", "EXPLANATION"
+        self.menu_focus = "mode_2"            # Foco do menu: "mode_1", "mode_2", "explanation", "start"
         self.previous_state = "MENU"
         self.stars = [Star(self.screen_w, self.screen_h) for _ in range(110)]
         self.anim_time = 0.0
@@ -540,8 +881,55 @@ class RocketGame:
         self.score = 0.0
         self.max_altitude = INITIAL_ALTITUDE
         self.max_speed = 0.0
-        self.low_fuel_timer = 0.0
         self.sounds.play_engine(False)
+
+        # Rastreamento de estatísticas extras
+        self.thrust_time = 0.0
+        self.max_mach = 0.0
+        self.freefall_count = 0
+        self.in_freefall = False
+
+        # Sistema de Combustível no Meio do Caminho
+        self.fuel_canisters = []
+        self.floating_texts = []
+        self.fuel_canisters_collected = 0
+        self.total_fuel_recharged = 0.0
+
+        # Geração inicial de combustível com espaçamento progressivo:
+        # As cápsulas ficam cada vez mais distantes progressivamente ao longo da subida.
+        cur_y = 1150.0
+        self.canister_idx = 0
+        while cur_y <= TARGET_ALTITUDE + 200.0:
+            spread = 20.0 + min(25.0, (cur_y / TARGET_ALTITUDE) * 25.0)
+            spawn_x = random.uniform(-spread, spread)
+            self.fuel_canisters.append(FuelCanister(spawn_x, cur_y, amount=20_000.0))
+            step = self.get_progressive_canister_spacing(cur_y, self.canister_idx)
+            cur_y += step
+            self.canister_idx += 1
+        self.highest_fuel_y = cur_y
+
+        # Vento lateral aleatório
+        self.wind_force = 0.0        # Força atual de vento (N), positivo = Leste
+        self.wind_target = 0.0       # Alvo suave para transição
+        self.wind_timer = 0.0        # Cronômetro para mudar vento
+        self.wind_interval = random.uniform(5.0, 12.0)  # Intervalo de mudança (s)
+
+    def get_progressive_canister_spacing(self, current_y, canister_idx):
+        """
+        Calcula o espaçamento até o próximo combustível, aumentando progressivamente.
+        À medida que o foguete sobe e ganha velocidade, as cápsulas ficam cada vez
+        mais distantes umas das outras.
+        """
+        alt_progress = max(0.0, (current_y - 1000.0) / 9000.0)
+        if self.selected_mode == "ACADEMICO":
+            # Começa em ~230-260m (suporte inicial para o foguete pesado TWR 1.02)
+            # e afasta progressivamente a cada cápsula (+65m) e com altitude (+280m)
+            base_dist = 230.0 + (canister_idx * 65.0) + (alt_progress * 280.0)
+        else:
+            # Modo Aeroespacial: começa em ~380m e afasta progressivamente (+80m por cápsula)
+            base_dist = 380.0 + (canister_idx * 80.0) + (alt_progress * 300.0)
+        jitter = random.uniform(-0.04, 0.04) * base_dist
+        return base_dist + jitter
 
     # -----------------------------------------------------------------
     # Utilitários de renderização
@@ -552,7 +940,7 @@ class RocketGame:
         return tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
 
     def draw_background(self, altitude):
-        pct = min(1.0, max(0.0, altitude / 3000.0))
+        pct = min(1.0, max(0.0, altitude / (TARGET_ALTITUDE * 0.75)))
 
         stops = [
             (0.00, (135, 206, 250), (225, 245, 255)),
@@ -615,6 +1003,115 @@ class RocketGame:
                     pygame.draw.line(self.screen, (180, 60, 50),
                                      (tx + 25, top_y), (tx + 25, gy), 4)
 
+    def draw_fuel_radar(self, cam_x, cam_y):
+        """Desenha indicadores sutis nas bordas da tela apontando para cápsulas de combustível próximas."""
+        sw = self.screen_w
+        sh = self.screen_h
+        cx = sw / 2.0
+        cy = sh / 2.0
+
+        pad_x = 50.0
+        pad_top = 155.0
+        pad_bot = 45.0
+
+        for can in self.fuel_canisters:
+            if can.collected:
+                continue
+
+            sx = (can.x - cam_x) + cx
+            sy = cy - (can.y - cam_y)
+
+            # Se já estiver confortavelmente visível na tela, pula o radar
+            if pad_x <= sx <= sw - pad_x and pad_top <= sy <= sh - pad_bot:
+                continue
+
+            dx = can.x - cam_x
+            dy = can.y - cam_y
+            dist = math.hypot(dx, dy)
+
+            # Raio de detecção do sensor (2.400m)
+            if dist > 2400.0:
+                continue
+
+            screen_dx = sx - cx
+            screen_dy = sy - cy
+
+            if abs(screen_dx) < 1e-3 and abs(screen_dy) < 1e-3:
+                continue
+
+            max_x = (sw / 2.0) - pad_x
+            max_y_up = (sh / 2.0) - pad_top
+            max_y_down = (sh / 2.0) - pad_bot
+
+            scale_x = abs(max_x / screen_dx) if abs(screen_dx) > 1e-3 else 999999.0
+            scale_y = (max_y_up / -screen_dy if screen_dy < 0 else max_y_down / screen_dy) if abs(screen_dy) > 1e-3 else 999999.0
+
+            scale = min(scale_x, scale_y)
+            indicator_x = cx + screen_dx * scale
+            indicator_y = cy + screen_dy * scale
+
+            ang = math.atan2(screen_dy, screen_dx)
+
+            # Triângulo indicador na direção do combustível
+            tip_x = indicator_x + math.cos(ang) * 14
+            tip_y = indicator_y + math.sin(ang) * 14
+            left_x = indicator_x + math.cos(ang + 2.5) * 11
+            left_y = indicator_y + math.sin(ang + 2.5) * 11
+            right_x = indicator_x + math.cos(ang - 2.5) * 11
+            right_y = indicator_y + math.sin(ang - 2.5) * 11
+
+            poly = [(tip_x, tip_y), (left_x, left_y), (right_x, right_y)]
+            pygame.draw.polygon(self.screen, (0, 245, 170), poly)
+            pygame.draw.polygon(self.screen, (255, 255, 255), poly, 1)
+
+            # Etiqueta com distância (ex: "⛽ 350m")
+            txt = f"⛽ {int(dist)}m"
+            lbl = self.font_small.render(txt, True, (215, 255, 235))
+
+            tx = indicator_x - math.cos(ang) * 32
+            ty = indicator_y - math.sin(ang) * 32
+            txt_rect = lbl.get_rect(center=(int(tx), int(ty)))
+
+            bg_rect = txt_rect.inflate(10, 4)
+            s_bg = pygame.Surface((bg_rect.w, bg_rect.h), pygame.SRCALPHA)
+            s_bg.fill((12, 24, 20, 215))
+            pygame.draw.rect(s_bg, (0, 220, 150, 180), (0, 0, bg_rect.w, bg_rect.h), 1, border_radius=4)
+            self.screen.blit(s_bg, bg_rect)
+            self.screen.blit(lbl, txt_rect)
+
+    # -----------------------------------------------------------------
+    # Alerta Visual de Queda Livre
+    # -----------------------------------------------------------------
+    def draw_freefall_alert(self):
+        """Mostra alerta visual pulsante quando o foguete está em queda livre perigosa (Vy < -20 m/s)."""
+        if not self.in_freefall or not self.rocket.alive:
+            return
+
+        pulse = (math.sin(self.anim_time * 10) + 1) / 2
+
+        # Borda vermelha pulsante ao redor da tela inteira
+        border_alpha = int(70 + 110 * pulse)
+        border_surf = pygame.Surface((self.screen_w, self.screen_h), pygame.SRCALPHA)
+        pygame.draw.rect(border_surf, (255, 30, 30, border_alpha),
+                         (0, 0, self.screen_w, self.screen_h), 22)
+        self.screen.blit(border_surf, (0, 0))
+
+        # Banner central de alerta com texto pulsante
+        banner_w, banner_h = 560, 60
+        bx = (self.screen_w - banner_w) // 2
+        by = self.screen_h // 2 + 68
+
+        bg_alpha = int(190 + 65 * pulse)
+        banner_surf = pygame.Surface((banner_w, banner_h), pygame.SRCALPHA)
+        banner_surf.fill((150, 0, 0, bg_alpha))
+        pygame.draw.rect(banner_surf, (255, 70, 70, 255), (0, 0, banner_w, banner_h), 2, border_radius=10)
+        self.screen.blit(banner_surf, (bx, by))
+
+        alert_col = (255, int(190 + 65 * pulse), 50)
+        alert_txt = self.font_sub.render(
+            f"⚠️  QUEDA LIVRE!   Vy = {self.rocket.vy:+.1f} m/s  ⚠️", True, alert_col)
+        self.screen.blit(alert_txt, alert_txt.get_rect(center=(self.screen_w // 2, by + banner_h // 2)))
+
     # -----------------------------------------------------------------
     # HUD — Informações na tela durante o jogo
     # -----------------------------------------------------------------
@@ -659,6 +1156,13 @@ class RocketGame:
             True, (240, 245, 255))
         self.screen.blit(lbl_fuel, (bx + bar_w + 12, by + 1))
 
+        # Indicador de cápsulas de combustível coletadas no ar
+        cans_col = (0, 240, 170) if self.fuel_canisters_collected > 0 else (160, 180, 200)
+        lbl_cans = self.font_hud.render(
+            f"⛽ RECARGAS: {self.fuel_canisters_collected} (+{int(self.total_fuel_recharged):,} kg)",
+            True, cans_col)
+        self.screen.blit(lbl_cans, (bx + bar_w + 12, by + 23))
+
         # Status do Áudio e Atalho de Explicação
         audio_txt = "[M] ÁUDIO: MUDO" if self.sounds.muted else "[M] ÁUDIO: ATIVO"
         audio_color = (255, 120, 120) if self.sounds.muted else (130, 220, 160)
@@ -669,17 +1173,36 @@ class RocketGame:
             "[E] VER EXPLICAÇÃO FÍSICA DOS MODOS", True, (0, 230, 255))
         self.screen.blit(lbl_help_hud, (30, 114))
 
-        # ---- Altitude e Velocidade ----
+        # ---- Altitude, Meta de Vitória e Velocidade ----
         col2 = self.screen_w // 2 - 130
         lbl_alt = self.font_hud.render(
-            f"ALTITUDE: {self.rocket.y:.1f} m", True, (200, 220, 255))
-        self.screen.blit(lbl_alt, (col2, 64))
+            f"ALTITUDE: {self.rocket.y:.1f} m  |  META: {TARGET_ALTITUDE:.0f} m",
+            True, (200, 230, 255))
+        self.screen.blit(lbl_alt, (col2, 60))
+
+        # Barra de progresso para alcançar a órbita / vitória
+        progress_pct = max(0.0, min(1.0, (self.rocket.y - INITIAL_ALTITUDE) / (TARGET_ALTITUDE - INITIAL_ALTITUDE)))
+        bar_w_meta = 240
+        pygame.draw.rect(self.screen, (30, 40, 55), (col2, 80, bar_w_meta, 5), border_radius=3)
+        pygame.draw.rect(self.screen, (0, 235, 220), (col2, 80, int(bar_w_meta * progress_pct), 5), border_radius=3)
+        pygame.draw.rect(self.screen, (70, 110, 160), (col2, 80, bar_w_meta, 5), 1, border_radius=3)
 
         spd = math.hypot(self.rocket.vx, self.rocket.vy)
+        mach = spd / SPEED_OF_SOUND
+        if mach >= 1.0:
+            mach_str = f"Mach {mach:.2f} (SUPERSÔNICO)"
+            mach_col = (255, 120, 60)
+        elif mach >= 0.8:
+            mach_str = f"Mach {mach:.2f} (TRANSÔNICO)"
+            mach_col = (255, 215, 60)
+        else:
+            mach_str = f"Mach {mach:.2f}"
+            mach_col = (195, 225, 255)
+
         lbl_vel = self.font_hud.render(
-            f"VEL: {spd:.1f} m/s   Vy={self.rocket.vy:+.1f}   Vx={self.rocket.vx:+.1f}",
-            True, (200, 220, 255))
-        self.screen.blit(lbl_vel, (col2, 88))
+            f"VEL: {spd:.1f} m/s ({mach_str})   Vy={self.rocket.vy:+.1f}   Vx={self.rocket.vx:+.1f}",
+            True, mach_col if mach >= 0.8 else (200, 220, 255))
+        self.screen.blit(lbl_vel, (col2, 90))
 
         # Aceleração vertical líquida real
         angle_rad = math.radians(self.rocket.angle)
@@ -692,6 +1215,20 @@ class RocketGame:
         lbl_accel = self.font_hud.render(
             f"ACEL. VERTICAL: {accel_vert:+.2f} m/s²", True, acc_color)
         self.screen.blit(lbl_accel, (col2, 112))
+
+        # Indicador de estado acústico aeroespacial (Melhoria 5)
+        alt_pct = min(1.0, max(0.0, self.rocket.y / TARGET_ALTITUDE))
+        if alt_pct > 0.70:
+            atmos_txt = "ACÚSTICA: VÁCUO (Som Abafado na Fuselagem)"
+            atmos_col = (130, 205, 255)
+        elif alt_pct > 0.35:
+            atmos_txt = f"ACÚSTICA: Rarefação Atmosférica ({int((1.0 - alt_pct) * 100)}%)"
+            atmos_col = (170, 235, 220)
+        else:
+            atmos_txt = "ACÚSTICA: Atmosfera Densa (Som Pleno)"
+            atmos_col = (160, 210, 190)
+        lbl_atmos = self.font_small.render(atmos_txt, True, atmos_col)
+        self.screen.blit(lbl_atmos, (col2 + 250, 114))
 
         # ---- Modo Ativo, Massa, Motor e TWR ----
         col3 = self.screen_w - 440
@@ -716,11 +1253,26 @@ class RocketGame:
             f"MOTOR: {thrust_status}  (F = {self.rocket.thrust_force / 1e6:.1f} MN)", True, thrust_color)
         self.screen.blit(lbl_thrust, (col3, 64))
 
-        # Constantes físicas resumidas
+        # Indicador de vento lateral
+        wind_kn = self.wind_force / 1000.0
+        if abs(self.wind_force) < 4_000.0:
+            wind_str = "VENTO: — CALMO"
+            wind_col = (150, 200, 155)
+        elif self.wind_force > 0:
+            strength = "FORTE" if self.wind_force > 28_000 else "MODERADO"
+            wind_str = f"VENTO: → {wind_kn:.1f} kN (Leste, {strength})"
+            wind_col = (255, 195, 70) if self.wind_force > 28_000 else (190, 235, 170)
+        else:
+            strength = "FORTE" if self.wind_force < -28_000 else "MODERADO"
+            wind_str = f"VENTO: ← {abs(wind_kn):.1f} kN (Oeste, {strength})"
+            wind_col = (255, 195, 70) if self.wind_force < -28_000 else (190, 235, 170)
+        lbl_wind = self.font_small.render(wind_str, True, wind_col)
+        self.screen.blit(lbl_wind, (col3, 90))
+
         lbl_g = self.font_small.render(
-            f"g = {GRAVITY} m/s²   |   Δt = 1/{FPS}s   |   Consumo: 100 kg/frame",
-            True, (140, 165, 195))
-        self.screen.blit(lbl_g, (col3, 90))
+            f"g = {GRAVITY} m/s²   |   Δt = 1/{FPS}s",
+            True, (120, 145, 180))
+        self.screen.blit(lbl_g, (col3, 108))
 
         lbl_switch = self.font_small.render(
             "[1] Modo Acadêmico   |   [2] Modo Aeroespacial", True, (240, 200, 90))
@@ -749,34 +1301,48 @@ class RocketGame:
         by = (self.screen_h - ph) // 2
         self.screen.blit(box, (bx, by))
 
+        pulse = (math.sin(self.anim_time * 6) + 1) / 2
+
         # Título
         t = self.font_title.render("FOGUETE — Simulador Físico", True, (255, 215, 60))
-        self.screen.blit(t, t.get_rect(center=(self.screen_w // 2, by + 40)))
+        self.screen.blit(t, t.get_rect(center=(self.screen_w // 2, by + 36)))
 
         sub = self.font_sub.render("SELECIONE O MODO DE SIMULAÇÃO:", True, (220, 235, 255))
-        self.screen.blit(sub, sub.get_rect(center=(self.screen_w // 2, by + 80)))
+        self.screen.blit(sub, sub.get_rect(center=(self.screen_w // 2, by + 74)))
 
         # Cards dos Modos
         card_w = (pw - 60) // 2
         card_h = 240
-        card_y = by + 110
+        card_y = by + 102
 
         # --- Card 1: Modo Acadêmico ---
         c1_x = bx + 22
         is_m1 = (self.selected_mode == "ACADEMICO")
-        c1_bg = (35, 25, 20, 240) if is_m1 else (20, 25, 35, 180)
-        c1_border = (255, 160, 40) if is_m1 else (65, 80, 105)
+        is_foc_m1 = (self.menu_focus == "mode_1")
+        c1_bg = (38, 26, 20, 245) if is_m1 else (20, 25, 35, 180)
+        c1_border = (255, 175, 55) if is_m1 else (65, 80, 105)
         c1_surf = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
         c1_surf.fill(c1_bg)
         pygame.draw.rect(c1_surf, c1_border, (0, 0, card_w, card_h), 3 if is_m1 else 1, border_radius=12)
         self.screen.blit(c1_surf, (c1_x, card_y))
         self.btn_rects["mode_1"] = pygame.Rect(c1_x, card_y, card_w, card_h)
 
-        status_m1 = "[ ATIVO ]" if is_m1 else "[ TECLA 1 ]"
-        t1 = self.font_hud.render(f"MODO 1: ACADÊMICO {status_m1}", True, (255, 175, 60) if is_m1 else (190, 190, 200))
+        # Glow pulsante quando Card 1 está em foco nas setas
+        if is_foc_m1:
+            glow_surf1 = pygame.Surface((card_w + 14, card_h + 14), pygame.SRCALPHA)
+            pygame.draw.rect(glow_surf1, (255, 195, 60, int(80 + 90 * pulse)),
+                             (0, 0, card_w + 14, card_h + 14), 3, border_radius=15)
+            self.screen.blit(glow_surf1, (c1_x - 7, card_y - 7))
+
+        status_m1 = "◄ SELECIONADO ►" if is_m1 else "[ TECLA 1 ]"
+        t1 = self.font_hud.render(f"MODO 1: ACADÊMICO", True, (255, 180, 65) if is_m1 else (190, 190, 200))
         self.screen.blit(t1, (c1_x + 16, card_y + 14))
 
-        sub1 = self.font_small.render("Requisitos Estritos da Atividade", True, (200, 210, 225))
+        status_tag1 = self.font_small.render(
+            status_m1, True, (255, 215, 80) if is_foc_m1 else ((255, 160, 50) if is_m1 else (140, 150, 170)))
+        self.screen.blit(status_tag1, (c1_x + card_w - status_tag1.get_width() - 16, card_y + 16))
+
+        sub1 = self.font_small.render("Requisitos Estritos da Atividade  [ ← SETA ESQ ]", True, (200, 215, 230) if is_m1 else (150, 160, 175))
         self.screen.blit(sub1, (c1_x + 16, card_y + 38))
 
         specs_m1 = [
@@ -794,63 +1360,102 @@ class RocketGame:
         # --- Card 2: Modo Aeroespacial ---
         c2_x = bx + pw - card_w - 22
         is_m2 = (self.selected_mode == "AEROESPACIAL")
-        c2_bg = (18, 38, 30, 240) if is_m2 else (20, 25, 35, 180)
-        c2_border = (40, 230, 160) if is_m2 else (65, 80, 105)
+        is_foc_m2 = (self.menu_focus == "mode_2")
+        c2_bg = (18, 40, 32, 245) if is_m2 else (20, 25, 35, 180)
+        c2_border = (45, 235, 165) if is_m2 else (65, 80, 105)
         c2_surf = pygame.Surface((card_w, card_h), pygame.SRCALPHA)
         c2_surf.fill(c2_bg)
         pygame.draw.rect(c2_surf, c2_border, (0, 0, card_w, card_h), 3 if is_m2 else 1, border_radius=12)
         self.screen.blit(c2_surf, (c2_x, card_y))
         self.btn_rects["mode_2"] = pygame.Rect(c2_x, card_y, card_w, card_h)
 
-        status_m2 = "[ ATIVO ]" if is_m2 else "[ TECLA 2 ]"
-        t2 = self.font_hud.render(f"MODO 2: AEROESPACIAL {status_m2}", True, (50, 240, 170) if is_m2 else (190, 190, 200))
+        # Glow pulsante quando Card 2 está em foco nas setas
+        if is_foc_m2:
+            glow_surf2 = pygame.Surface((card_w + 14, card_h + 14), pygame.SRCALPHA)
+            pygame.draw.rect(glow_surf2, (60, 255, 180, int(80 + 90 * pulse)),
+                             (0, 0, card_w + 14, card_h + 14), 3, border_radius=15)
+            self.screen.blit(glow_surf2, (c2_x - 7, card_y - 7))
+
+        status_m2 = "◄ SELECIONADO ►" if is_m2 else "[ TECLA 2 ]"
+        t2 = self.font_hud.render(f"MODO 2: AEROESPACIAL", True, (55, 245, 175) if is_m2 else (190, 190, 200))
         self.screen.blit(t2, (c2_x + 16, card_y + 14))
 
-        sub2 = self.font_small.render("Opção 1 — Realista & Jogável", True, (200, 210, 225))
+        status_tag2 = self.font_small.render(
+            status_m2, True, (100, 255, 200) if is_foc_m2 else ((45, 230, 160) if is_m2 else (140, 150, 170)))
+        self.screen.blit(status_tag2, (c2_x + card_w - status_tag2.get_width() - 16, card_y + 16))
+
+        sub2 = self.font_small.render("Opção 1 — Realista & Jogável  [ SETA DIR → ]", True, (200, 240, 230) if is_m2 else (150, 160, 175))
         self.screen.blit(sub2, (c2_x + 16, card_y + 38))
 
         specs_m2 = [
-            "• Empuxo: 2,8 × 10⁶ N (Padrão Falcon 9 / Saturn V)",
-            "• Razão Empuxo/Peso (TWR): 1,43",
-            "• Aceleração inicial: 4,20 m/s² (potente e ágil)",
+            "• Empuxo: 3,5 × 10⁶ N (Alta Potência)",
+            "• Razão Empuxo/Peso (TWR): 1,79",
+            "• Aceleração inicial: 7,70 m/s² (atinge 25,2 m/s²)",
             "• Rotação: Gimbal suave contínuo (55°/s)",
-            "• Comportamento: Decolagem potente e",
-            "  manobras firmes com sustentação positiva.",
+            "• Comportamento: Decolagem fulminante e",
+            "  velocidades supersônicas (Mach 1+).",
         ]
         for idx, sp in enumerate(specs_m2):
             lbl_sp = self.font_small.render(sp, True, (210, 240, 230) if idx < 4 else (120, 255, 180))
             self.screen.blit(lbl_sp, (c2_x + 16, card_y + 65 + idx * 24))
 
-        # Dica de alternância
-        hint_mode = self.font_small.render(
-            "Pressione [ 1 ] ou [ 2 ] (ou clique nos cards acima) para selecionar o modo",
-            True, (200, 220, 255))
-        self.screen.blit(hint_mode, hint_mode.get_rect(center=(self.screen_w // 2, card_y + card_h + 20)))
+        # Dica de navegação por setas do teclado
+        hint_mode = self.font_hud.render(
+            "🎮 Navegue com as SETAS [ ← → ↑ ↓ ]   •   Pressione [ ENTER ] ou [ ESPAÇO ] para confirmar",
+            True, (255, 220, 85))
+        self.screen.blit(hint_mode, hint_mode.get_rect(center=(self.screen_w // 2, card_y + card_h + 18)))
 
         # Botão de Explicação Física Completa
-        btn_exp_w, btn_exp_h = 580, 44
+        btn_exp_w, btn_exp_h = 600, 44
         btn_exp_x = (self.screen_w - btn_exp_w) // 2
-        btn_exp_y = card_y + card_h + 45
+        btn_exp_y = card_y + card_h + 40
         self.btn_rects["explanation"] = pygame.Rect(btn_exp_x, btn_exp_y, btn_exp_w, btn_exp_h)
+        is_foc_exp = (self.menu_focus == "explanation")
 
-        pygame.draw.rect(self.screen, (25, 45, 75), self.btn_rects["explanation"], border_radius=8)
-        pygame.draw.rect(self.screen, (0, 210, 255), self.btn_rects["explanation"], 2, border_radius=8)
-        exp_txt = self.font_hud.render(
-            "🔬 [ E ] LER EXPLICAÇÃO FÍSICA DETALHADA DOS MODOS", True, (0, 230, 255))
+        if is_foc_exp:
+            glow_exp = pygame.Surface((btn_exp_w + 10, btn_exp_h + 10), pygame.SRCALPHA)
+            pygame.draw.rect(glow_exp, (0, 220, 255, int(90 + 90 * pulse)), (0, 0, btn_exp_w + 10, btn_exp_h + 10), 3, border_radius=12)
+            self.screen.blit(glow_exp, (btn_exp_x - 5, btn_exp_y - 5))
+            pygame.draw.rect(self.screen, (25, 60, 105), self.btn_rects["explanation"], border_radius=8)
+            pygame.draw.rect(self.screen, (100, 240, 255), self.btn_rects["explanation"], 2, border_radius=8)
+            exp_txt = self.font_hud.render(
+                "►  🔬  [ ENTER / E ] LER EXPLICAÇÃO FÍSICA DETALHADA DOS MODOS  ◄", True, (220, 255, 255))
+        else:
+            pygame.draw.rect(self.screen, (22, 38, 65), self.btn_rects["explanation"], border_radius=8)
+            pygame.draw.rect(self.screen, (0, 190, 240), self.btn_rects["explanation"], 2, border_radius=8)
+            exp_txt = self.font_hud.render(
+                "🔬 [ E ] LER EXPLICAÇÃO FÍSICA DETALHADA DOS MODOS", True, (0, 220, 255))
         self.screen.blit(exp_txt, exp_txt.get_rect(center=self.btn_rects["explanation"].center))
 
-        # Controles Básicos
+        # Dica resumida de controles do foguete durante o voo
         ctrl_txt = self.font_small.render(
-            "Controles: [ ESPAÇO ] Motor   |   [ ← → ] ou [ A / D ] Manobrar   |   [ M ] Áudio   |   [ ESC ] Sair",
-            True, (170, 190, 220))
-        self.screen.blit(ctrl_txt, ctrl_txt.get_rect(center=(self.screen_w // 2, by + ph - 65)))
+            "Em voo: [ ESPAÇO ] Propulsão   |   [ ← → ] ou [ A D ] Manobrar   |   [ ⛽ ] Colete combustível no ar",
+            True, (160, 185, 215))
+        self.screen.blit(ctrl_txt, ctrl_txt.get_rect(center=(self.screen_w // 2, by + ph - 74)))
 
-        # Botão pulsante para começar
-        pulse = (math.sin(self.anim_time * 6) + 1) / 2
-        bc = (int(255 * (0.8 + 0.2 * pulse)), int(180 * (0.8 + 0.2 * pulse)), 40)
-        s = self.font_sub.render(
-            f"PRESSIONE [ ESPAÇO ] PARA DECOLAR NO {self.selected_mode}", True, bc)
-        self.screen.blit(s, s.get_rect(center=(self.screen_w // 2, by + ph - 25)))
+        # Botão interativo para Começar / Decolar
+        btn_start_w, btn_start_h = 620, 48
+        btn_start_x = (self.screen_w - btn_start_w) // 2
+        btn_start_y = by + ph - 52
+        self.btn_rects["start"] = pygame.Rect(btn_start_x, btn_start_y, btn_start_w, btn_start_h)
+        is_foc_start = (self.menu_focus == "start")
+
+        if is_foc_start:
+            glow_start = pygame.Surface((btn_start_w + 10, btn_start_h + 10), pygame.SRCALPHA)
+            pygame.draw.rect(glow_start, (255, 220, 60, int(90 + 90 * pulse)), (0, 0, btn_start_w + 10, btn_start_h + 10), 3, border_radius=14)
+            self.screen.blit(glow_start, (btn_start_x - 5, btn_start_y - 5))
+            pygame.draw.rect(self.screen, (55, 45, 15), self.btn_rects["start"], border_radius=10)
+            pygame.draw.rect(self.screen, (255, 225, 70), self.btn_rects["start"], 2, border_radius=10)
+            s = self.font_sub.render(
+                f"►  🚀 PRESSIONE [ ENTER / ESPAÇO ] PARA DECOLAR NO {self.selected_mode}  ◄",
+                True, (255, 235, 90))
+        else:
+            bc = (int(255 * (0.8 + 0.2 * pulse)), int(185 * (0.8 + 0.2 * pulse)), 40)
+            pygame.draw.rect(self.screen, (20, 32, 28), self.btn_rects["start"], border_radius=10)
+            pygame.draw.rect(self.screen, (70, 120, 95), self.btn_rects["start"], 1, border_radius=10)
+            s = self.font_sub.render(
+                f"🚀 PRESSIONE [ ESPAÇO ] PARA DECOLAR NO {self.selected_mode}", True, bc)
+        self.screen.blit(s, s.get_rect(center=self.btn_rects["start"].center))
 
     # -----------------------------------------------------------------
     # Tela de Explicação Física Completa (Diferença & Por que existem)
@@ -986,7 +1591,7 @@ class RocketGame:
         overlay.fill((20, 5, 5, 220))
         self.screen.blit(overlay, (0, 0))
 
-        pw, ph = 680, 460
+        pw, ph = 700, 575
         panel = pygame.Surface((pw, ph), pygame.SRCALPHA)
         panel.fill((30, 15, 18, 245))
         pygame.draw.rect(panel, (240, 70, 70),
@@ -1011,27 +1616,132 @@ class RocketGame:
             f"Altitude Máxima: {self.max_altitude:.1f} m",
             f"Velocidade Máxima: {self.max_speed:.1f} m/s ({self.max_speed * 3.6:.1f} km/h)",
             f"Combustível Restante: {self.rocket.fuel_mass:.0f} kg ({self.rocket.fuel_mass / FUEL_TOTAL_MASS * 100:.1f}%)",
+            f"Cápsulas Coletadas no Ar: {self.fuel_canisters_collected} (+{int(self.total_fuel_recharged):,} kg recarregados)",
         ]
         for i, txt in enumerate(stats):
             s = self.font_hud.render(txt, True, (230, 235, 245))
-            self.screen.blit(s, (px + 60, py + 175 + i * 32))
+            self.screen.blit(s, (px + 50, py + 175 + i * 27))
+
+        # Separador e estatísticas extras detalhadas
+        sep_y = py + 175 + 4 * 27 + 8
+        pygame.draw.line(self.screen, (110, 45, 45), (px + 24, sep_y), (px + pw - 24, sep_y), 1)
+        lbl_extra_hdr = self.font_small.render("— Estatísticas Detalhadas —", True, (200, 140, 140))
+        self.screen.blit(lbl_extra_hdr, lbl_extra_hdr.get_rect(center=(self.screen_w // 2, sep_y + 11)))
+
+        efficiency = (self.thrust_time / self.score * 100) if self.score > 0 else 0.0
+        extra_stats = [
+            (f"⏱  Motor ligado: {self.thrust_time:.1f}s de {self.score:.1f}s  ({efficiency:.0f}% do tempo)",
+             (180, 230, 255)),
+            (f"🚀  Mach máximo: {self.max_mach:.3f}" +
+             (" (SUPERSÔNICO! 💥)" if self.max_mach >= 1.0 else " (Subsônico)"),
+             (255, 200, 80) if self.max_mach >= 1.0 else (190, 215, 245)),
+            (f"📉  Entradas em queda livre (Vy < −20 m/s): {self.freefall_count}×",
+             (255, 130, 130) if self.freefall_count > 0 else (150, 215, 175)),
+        ]
+        for i, (txt, col) in enumerate(extra_stats):
+            s = self.font_small.render(txt, True, col)
+            self.screen.blit(s, (px + 50, sep_y + 26 + i * 24))
 
         # Dica física caso tenha caído no modo acadêmico
         if self.rocket.mode == "ACADEMICO":
             tip_fail = self.font_small.render(
                 "* No Modo Acadêmico (TWR 1,02), qualquer inclinação de 30° faz o foguete perder sustentação e cair.",
                 True, (255, 170, 130))
-            self.screen.blit(tip_fail, (px + 30, py + 290))
+            self.screen.blit(tip_fail, (px + 20, sep_y + 26 + 3 * 24 + 6))
 
         # Atalhos
         r1 = self.font_sub.render(
             "[ R ] ou [ ESPAÇO ]: Jogar Novamente", True, (255, 220, 80))
-        self.screen.blit(r1, r1.get_rect(center=(self.screen_w // 2, py + 340)))
+        self.screen.blit(r1, r1.get_rect(center=(self.screen_w // 2, py + 490)))
 
         r2 = self.font_small.render(
             "[ 1 ] Modo Acadêmico   |   [ 2 ] Modo Aeroespacial   |   [ E ] Ver Explicação Física   |   [ ESC ] Sair",
             True, (200, 230, 255))
-        self.screen.blit(r2, r2.get_rect(center=(self.screen_w // 2, py + 390)))
+        self.screen.blit(r2, r2.get_rect(center=(self.screen_w // 2, py + 536)))
+
+    # -----------------------------------------------------------------
+    # Tela de Vitória (Missão Cumprida — Órbita Atingida)
+    # -----------------------------------------------------------------
+    def draw_victory(self):
+        overlay = pygame.Surface((self.screen_w, self.screen_h), pygame.SRCALPHA)
+        overlay.fill((4, 18, 28, 235))
+        self.screen.blit(overlay, (0, 0))
+
+        pw, ph = 760, 615
+        panel = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        panel.fill((12, 24, 38, 250))
+        pygame.draw.rect(panel, (0, 230, 170), (0, 0, pw, ph), 3, border_radius=18)
+        px = (self.screen_w - pw) // 2
+        py = (self.screen_h - ph) // 2
+        self.screen.blit(panel, (px, py))
+
+        # Título triunfante com animação suave
+        pulse = (math.sin(self.anim_time * 5) + 1) / 2
+        t_col = (255, int(210 + 45 * pulse), 50)
+        t = self.font_title.render("🏆 VITÓRIA! MISSÃO CUMPRIDA! 🏆", True, t_col)
+        self.screen.blit(t, t.get_rect(center=(self.screen_w // 2, py + 42)))
+
+        sub = self.font_sub.render(
+            f"O foguete superou a atmosfera e alcançou o espaço ({TARGET_ALTITUDE:.0f} m)!",
+            True, (140, 235, 255))
+        self.screen.blit(sub, sub.get_rect(center=(self.screen_w // 2, py + 84)))
+
+        # Score final
+        score_s = self.font_score.render(
+            f"TEMPO FINAL: {self.score:.2f} s", True, (255, 220, 60))
+        self.screen.blit(score_s, score_s.get_rect(center=(self.screen_w // 2, py + 132)))
+
+        mode_cfg = GAME_MODES[self.rocket.mode]
+        lbl_mod = self.font_hud.render(
+            f"Modo Conquistado: {mode_cfg['title']} ({mode_cfg['subtitle']})", True, mode_cfg["badge_color"])
+        self.screen.blit(lbl_mod, lbl_mod.get_rect(center=(self.screen_w // 2, py + 176)))
+
+        # Estatísticas da missão
+        stats = [
+            f"Altitude Atingida: {self.rocket.y:.1f} m (Meta de {TARGET_ALTITUDE:.0f} m superada!)",
+            f"Velocidade Máxima: {self.max_speed:.1f} m/s ({self.max_speed * 3.6:.1f} km/h)",
+            f"Combustível Restante no Tanque: {self.rocket.fuel_mass:.0f} kg ({self.rocket.fuel_mass / FUEL_TOTAL_MASS * 100:.1f}%)",
+            f"Cápsulas Coletadas no Caminho: {self.fuel_canisters_collected} (+{int(self.total_fuel_recharged):,} kg de recarga)",
+        ]
+        for i, txt in enumerate(stats):
+            s = self.font_hud.render(txt, True, (230, 245, 255))
+            self.screen.blit(s, (px + 50, py + 210 + i * 29))
+
+        # Separador e estatísticas extras detalhadas
+        sep_y = py + 210 + 4 * 29 + 10
+        pygame.draw.line(self.screen, (0, 100, 80), (px + 24, sep_y), (px + pw - 24, sep_y), 1)
+        lbl_extra_hdr = self.font_small.render("— Estatísticas Detalhadas da Missão —", True, (90, 210, 175))
+        self.screen.blit(lbl_extra_hdr, lbl_extra_hdr.get_rect(center=(self.screen_w // 2, sep_y + 11)))
+
+        efficiency = (self.thrust_time / self.score * 100) if self.score > 0 else 0.0
+        extra_stats = [
+            (f"⏱  Motor ligado: {self.thrust_time:.1f}s de {self.score:.1f}s  ({efficiency:.0f}% do tempo)",
+             (180, 235, 255)),
+            (f"🚀  Mach máximo: {self.max_mach:.3f}" +
+             (" (SUPERSÔNICO! 💥)" if self.max_mach >= 1.0 else " (Subsônico)"),
+             (255, 220, 80) if self.max_mach >= 1.0 else (190, 220, 245)),
+            (f"📉  Entradas em queda livre (Vy < −20 m/s): {self.freefall_count}×",
+             (255, 170, 170) if self.freefall_count > 3 else (130, 245, 190)),
+        ]
+        for i, (txt, col) in enumerate(extra_stats):
+            s = self.font_small.render(txt, True, col)
+            self.screen.blit(s, (px + 50, sep_y + 26 + i * 24))
+
+        # Destaque de honra
+        lbl_praise = self.font_small.render(
+            "★ Parabéns! Excelente pilotagem newtoniana e gerenciamento de energia! ★",
+            True, (0, 255, 180))
+        self.screen.blit(lbl_praise, lbl_praise.get_rect(center=(self.screen_w // 2, sep_y + 26 + 3 * 24 + 16)))
+
+        # Botão principal de ação
+        bc = (int(255 * (0.8 + 0.2 * pulse)), int(220 * (0.8 + 0.2 * pulse)), 70)
+        r1 = self.font_sub.render("[ ESPAÇO ] ou [ R ]: Jogar Novamente", True, bc)
+        self.screen.blit(r1, r1.get_rect(center=(self.screen_w // 2, py + 534)))
+
+        r2 = self.font_small.render(
+            "[ 1 ] Modo Acadêmico   |   [ 2 ] Modo Aeroespacial   |   [ E ] Ver Explicação Física   |   [ ESC ] Sair",
+            True, (180, 210, 240))
+        self.screen.blit(r2, r2.get_rect(center=(self.screen_w // 2, py + 578)))
 
     # -----------------------------------------------------------------
     # Loop Principal
@@ -1048,16 +1758,38 @@ class RocketGame:
                 if event.type == pygame.QUIT:
                     running = False
 
+                elif event.type == pygame.MOUSEMOTION:
+                    mpos = event.pos
+                    if self.state == "MENU":
+                        if "mode_1" in self.btn_rects and self.btn_rects["mode_1"].collidepoint(mpos):
+                            self.menu_focus = "mode_1"
+                        elif "mode_2" in self.btn_rects and self.btn_rects["mode_2"].collidepoint(mpos):
+                            self.menu_focus = "mode_2"
+                        elif "explanation" in self.btn_rects and self.btn_rects["explanation"].collidepoint(mpos):
+                            self.menu_focus = "explanation"
+                        elif "start" in self.btn_rects and self.btn_rects["start"].collidepoint(mpos):
+                            self.menu_focus = "start"
+
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     mpos = event.pos
                     if self.state == "MENU":
                         if "mode_1" in self.btn_rects and self.btn_rects["mode_1"].collidepoint(mpos):
                             self.selected_mode = "ACADEMICO"
+                            self.menu_focus = "mode_1"
+                            self.sounds.play_ui_blip()
                         elif "mode_2" in self.btn_rects and self.btn_rects["mode_2"].collidepoint(mpos):
                             self.selected_mode = "AEROESPACIAL"
+                            self.menu_focus = "mode_2"
+                            self.sounds.play_ui_blip()
                         elif "explanation" in self.btn_rects and self.btn_rects["explanation"].collidepoint(mpos):
+                            self.menu_focus = "explanation"
                             self.previous_state = self.state
                             self.state = "EXPLANATION"
+                            self.sounds.play_ui_blip()
+                        elif "start" in self.btn_rects and self.btn_rects["start"].collidepoint(mpos):
+                            self.sounds.play_ui_blip()
+                            self.reset_game()
+                            self.state = "PLAYING"
 
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
@@ -1076,42 +1808,105 @@ class RocketGame:
                         else:
                             self.previous_state = self.state
                             self.state = "EXPLANATION"
+                        self.sounds.play_ui_blip()
 
                     # Teclas para selecionar os Modos
                     elif event.key in (pygame.K_1, pygame.K_KP1):
                         self.selected_mode = "ACADEMICO"
-                        if self.state in ("PLAYING", "GAMEOVER"):
+                        self.menu_focus = "mode_1"
+                        self.sounds.play_ui_blip()
+                        if self.state in ("PLAYING", "GAMEOVER", "VICTORY"):
                             self.reset_game()
                             self.state = "PLAYING"
 
                     elif event.key in (pygame.K_2, pygame.K_KP2):
                         self.selected_mode = "AEROESPACIAL"
-                        if self.state in ("PLAYING", "GAMEOVER"):
+                        self.menu_focus = "mode_2"
+                        self.sounds.play_ui_blip()
+                        if self.state in ("PLAYING", "GAMEOVER", "VICTORY"):
                             self.reset_game()
                             self.state = "PLAYING"
 
                     elif event.key == pygame.K_TAB:
                         self.selected_mode = "AEROESPACIAL" if self.selected_mode == "ACADEMICO" else "ACADEMICO"
-                        if self.state in ("PLAYING", "GAMEOVER"):
+                        self.menu_focus = "mode_2" if self.selected_mode == "AEROESPACIAL" else "mode_1"
+                        self.sounds.play_ui_blip()
+                        if self.state in ("PLAYING", "GAMEOVER", "VICTORY"):
                             self.reset_game()
                             self.state = "PLAYING"
 
-                    # Navegação por estados
+                    # Navegação por estados e controle do menu pelas setas
                     elif self.state == "MENU":
-                        if event.key in (pygame.K_SPACE, pygame.K_RETURN):
-                            self.reset_game()
-                            self.state = "PLAYING"
+                        if event.key in (pygame.K_UP, pygame.K_w):
+                            self.sounds.play_ui_blip()
+                            if self.menu_focus in ("mode_1", "mode_2"):
+                                self.menu_focus = "start"
+                            elif self.menu_focus == "explanation":
+                                self.menu_focus = "mode_1" if self.selected_mode == "ACADEMICO" else "mode_2"
+                            elif self.menu_focus == "start":
+                                self.menu_focus = "explanation"
+                            else:
+                                self.menu_focus = "mode_2"
 
-                    elif self.state == "GAMEOVER":
-                        if event.key in (pygame.K_r, pygame.K_SPACE):
+                        elif event.key in (pygame.K_DOWN, pygame.K_s):
+                            self.sounds.play_ui_blip()
+                            if self.menu_focus in ("mode_1", "mode_2"):
+                                self.menu_focus = "explanation"
+                            elif self.menu_focus == "explanation":
+                                self.menu_focus = "start"
+                            elif self.menu_focus == "start":
+                                self.menu_focus = "mode_1" if self.selected_mode == "ACADEMICO" else "mode_2"
+                            else:
+                                self.menu_focus = "explanation"
+
+                        elif event.key in (pygame.K_LEFT, pygame.K_a):
+                            self.sounds.play_ui_blip()
+                            self.selected_mode = "ACADEMICO"
+                            if self.menu_focus in ("mode_1", "mode_2"):
+                                self.menu_focus = "mode_1"
+
+                        elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                            self.sounds.play_ui_blip()
+                            self.selected_mode = "AEROESPACIAL"
+                            if self.menu_focus in ("mode_1", "mode_2"):
+                                self.menu_focus = "mode_2"
+
+                        elif event.key in (pygame.K_SPACE, pygame.K_RETURN):
+                            if self.menu_focus == "explanation":
+                                self.previous_state = self.state
+                                self.state = "EXPLANATION"
+                                self.sounds.play_ui_blip()
+                            else:
+                                self.sounds.play_ui_blip()
+                                self.reset_game()
+                                self.state = "PLAYING"
+
+                    elif self.state in ("GAMEOVER", "VICTORY"):
+                        if event.key in (pygame.K_LEFT, pygame.K_a):
+                            self.selected_mode = "ACADEMICO"
+                            self.menu_focus = "mode_1"
+                            self.sounds.play_ui_blip()
+                        elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                            self.selected_mode = "AEROESPACIAL"
+                            self.menu_focus = "mode_2"
+                            self.sounds.play_ui_blip()
+                        elif event.key in (pygame.K_r, pygame.K_SPACE, pygame.K_RETURN):
                             self.reset_game()
                             self.state = "PLAYING"
 
                     elif self.state == "EXPLANATION":
-                        if event.key in (pygame.K_SPACE, pygame.K_RETURN):
+                        if event.key in (pygame.K_LEFT, pygame.K_a):
+                            self.selected_mode = "ACADEMICO"
+                            self.menu_focus = "mode_1"
+                            self.sounds.play_ui_blip()
+                        elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                            self.selected_mode = "AEROESPACIAL"
+                            self.menu_focus = "mode_2"
+                            self.sounds.play_ui_blip()
+                        elif event.key in (pygame.K_SPACE, pygame.K_RETURN):
                             if self.previous_state == "PLAYING":
                                 self.reset_game()
-                            self.state = self.previous_state if self.previous_state != "GAMEOVER" else "PLAYING"
+                            self.state = self.previous_state if self.previous_state not in ("GAMEOVER", "VICTORY") else "PLAYING"
 
             keys = pygame.key.get_pressed()
 
@@ -1127,8 +1922,23 @@ class RocketGame:
                 for cloud in self.clouds:
                     cloud.update(DT)
 
-                # Atualiza o foguete (física principal com o modo selecionado)
-                self.rocket.update(keys, self.particles, self.sounds)
+                # Atualiza o foguete (física principal com o modo selecionado e efeitos sônicos)
+                self.rocket.update(keys, self.particles, self.sounds, floating_texts=self.floating_texts)
+
+                # --- Vento lateral aleatório ---
+                self.wind_timer += DT
+                if self.wind_timer >= self.wind_interval:
+                    self.wind_timer = 0.0
+                    self.wind_interval = random.uniform(5.0, 12.0)
+                    max_wind = 45_000.0  # N — força máxima do vento
+                    self.wind_target = random.uniform(-max_wind, max_wind)
+                # Transição suave (efeito ráfaga natural)
+                self.wind_force += (self.wind_target - self.wind_force) * 0.018
+                # Aplica vento ao foguete — diminui com altitude (atmosfera rarefeita)
+                if self.rocket.alive:
+                    atmos_w = max(0.0, 1.0 - self.rocket.y / 7500.0)
+                    wind_accel = (self.wind_force * atmos_w) / max(1.0, self.rocket.total_mass)
+                    self.rocket.vx += wind_accel * DT
 
                 # Estatísticas
                 if self.rocket.y > self.max_altitude:
@@ -1137,8 +1947,103 @@ class RocketGame:
                 if spd > self.max_speed:
                     self.max_speed = spd
 
+                # Rastreamento de Mach máximo, tempo de empuxo e queda livre
+                mach_cur = spd / SPEED_OF_SOUND
+                if mach_cur > self.max_mach:
+                    self.max_mach = mach_cur
+                if self.rocket.is_thrusting:
+                    self.thrust_time += DT
+                was_freefall = self.in_freefall
+                self.in_freefall = (self.rocket.vy < -20.0 and self.rocket.alive)
+                if self.in_freefall and not was_freefall:
+                    self.freefall_count += 1
+
+                # Atualiza textos flutuantes
+                for ft in self.floating_texts:
+                    ft.update(DT)
+                self.floating_texts = [ft for ft in self.floating_texts if ft.life > 0]
+
+                # Geração procedural com espaçamento progressivo contínuo
+                while self.highest_fuel_y < min(TARGET_ALTITUDE + 200.0, self.rocket.y + 2000):
+                    step = self.get_progressive_canister_spacing(self.highest_fuel_y, self.canister_idx)
+                    self.highest_fuel_y += step
+                    spread = 20.0 + min(25.0, (self.highest_fuel_y / TARGET_ALTITUDE) * 25.0)
+                    spawn_x = self.rocket.x + random.uniform(-spread, spread)
+                    self.fuel_canisters.append(FuelCanister(spawn_x, self.highest_fuel_y, amount=20_000.0))
+                    self.canister_idx += 1
+
+                # Atualiza cápsulas e testa colisão com o foguete
+                for can in self.fuel_canisters:
+                    if can.collected:
+                        continue
+                    can.update(DT)
+
+                    # Distância entre o foguete e a cápsula de combustível
+                    dx = self.rocket.x - can.x
+                    dy = self.rocket.y - can.y
+                    dist = math.hypot(dx, dy)
+
+                    # Colisão facilitada (raio de 68m para captura confortável)
+                    if dist <= 68.0 and self.rocket.alive:
+                        can.collected = True
+                        added = self.rocket.refuel(can.amount)
+                        self.fuel_canisters_collected += 1
+                        self.total_fuel_recharged += added
+                        self.sounds.play_refuel()
+
+                        # Partículas cintilantes de coleta
+                        for _ in range(35):
+                            ang = random.uniform(0, math.pi * 2)
+                            p_spd = random.uniform(50, 200)
+                            p_col = random.choice([
+                                (0, 255, 170), (50, 240, 255), (255, 230, 80), (255, 255, 255)
+                            ])
+                            self.particles.append(Particle(
+                                can.x + random.uniform(-6, 6),
+                                can.y + random.uniform(-6, 6),
+                                math.cos(ang) * p_spd,
+                                math.sin(ang) * p_spd,
+                                p_col, life=random.uniform(0.5, 1.1), size=random.uniform(4, 9)
+                            ))
+
+                        # Mensagem flutuante
+                        if added > 0:
+                            msg = f"+{int(added):,} kg COMBUSTÍVEL!"
+                        else:
+                            msg = "TANQUE CHEIO! (+100%)"
+                        self.floating_texts.append(FloatingText(
+                            can.x, can.y + 20, msg, color=(0, 255, 180)
+                        ))
+
+                # Limpeza de cápsulas coletadas que já ficaram muito para trás
+                self.fuel_canisters = [
+                    c for c in self.fuel_canisters
+                    if not (c.collected and c.y < self.rocket.y - 1200) and c.y > -500
+                ]
+
+                # Vitória: atingiu a altitude alvo (órbita / espaço)!
+                if self.rocket.y >= TARGET_ALTITUDE:
+                    self.state = "VICTORY"
+                    self.sounds.play_engine(False)
+                    self.sounds.play_victory()
+                    # Confetes comemorativos
+                    for _ in range(120):
+                        ang = random.uniform(0, math.pi * 2)
+                        p_spd = random.uniform(80, 320)
+                        p_col = random.choice([
+                            (255, 215, 0), (0, 245, 180), (255, 100, 200),
+                            (100, 220, 255), (255, 255, 255), (255, 180, 50)
+                        ])
+                        self.particles.append(Particle(
+                            self.rocket.x + random.uniform(-30, 30),
+                            self.rocket.y + random.uniform(-30, 30),
+                            math.cos(ang) * p_spd,
+                            math.sin(ang) * p_spd,
+                            p_col, life=random.uniform(1.2, 3.0), size=random.uniform(5, 11)
+                        ))
+
                 # Game over?
-                if not self.rocket.alive:
+                elif not self.rocket.alive:
                     self.state = "GAMEOVER"
                     self.sounds.play_explosion()
 
@@ -1159,10 +2064,23 @@ class RocketGame:
                     cloud.draw(self.screen, cam_x, cam_y,
                                self.screen_w, self.screen_h)
 
+                # Cápsulas de Combustível no caminho
+                for can in self.fuel_canisters:
+                    can.draw(self.screen, cam_x, cam_y,
+                             self.screen_w, self.screen_h)
+
+                # Indicadores de radar nas bordas da tela para cápsulas próximas
+                self.draw_fuel_radar(cam_x, cam_y)
+
                 # Partículas
                 for p in self.particles:
                     p.draw(self.screen, cam_x, cam_y,
                            self.screen_w, self.screen_h)
+
+                # Textos flutuantes de recarga
+                for ft in self.floating_texts:
+                    ft.draw(self.screen, self.font_hud, cam_x, cam_y,
+                            self.screen_w, self.screen_h)
 
                 # Foguete (no centro da tela — câmera segue)
                 rcx = self.screen_w // 2
@@ -1172,11 +2090,16 @@ class RocketGame:
                 # HUD
                 self.draw_hud()
 
+                # Alerta de queda livre (desenhado sobre o HUD para máxima visibilidade)
+                self.draw_freefall_alert()
+
             # --- Telas especiais ---
             if self.state == "MENU":
                 self.draw_menu()
             elif self.state == "GAMEOVER":
                 self.draw_game_over()
+            elif self.state == "VICTORY":
+                self.draw_victory()
             elif self.state == "EXPLANATION":
                 self.draw_explanation()
 
